@@ -580,6 +580,88 @@ class DetektAndroidSpec {
             }
         }
     }
+
+    @Nested
+    inner class `configures android tasks with custom config that uses ignoreAnnotated` {
+        val projectLayout = ProjectLayout(
+            numberOfSourceFilesInRootPerSourceDir = 0,
+        ).apply {
+            addSubmodule(
+                name = "app",
+                numberOfSourceFilesPerSourceDir = 0,
+                numberOfCodeSmells = 0,
+                buildFileContent = """
+                        $APP_PLUGIN_BLOCK
+                        $ANDROID_BLOCK_WITH_VIEW_BINDING
+                        $DETEKT_CUSTOM_CONFIG_BLOCK
+                    """.trimIndent(),
+                srcDirs = listOf("src/main/java"),
+            )
+        }
+        val gradleRunner = createGradleRunnerAndSetupProject(projectLayout, dryRun = false).also {
+            it.projectFile("app/src/main/java").mkdirs()
+            it.projectFile("app/src/main/res/layout").mkdirs()
+            it.writeProjectFile("app/config/detekt.yml", CONFIG_FILE_WITH_IGNOREANNOTATED_CONTENT)
+            it.writeProjectFile("app/src/main/AndroidManifest.xml", manifestContent())
+            it.writeProjectFile(
+                "app/src/main/res/layout/activity_sample.xml",
+                SAMPLE_ACTIVITY_LAYOUT
+            )
+            it.writeProjectFile(
+                "app/src/main/java/SampleActivity.kt",
+                SAMPLE_ACTIVITY_USING_VIEW_BINDING + FUNCTION_WITH_NAMING_VIOLATION
+            )
+        }
+
+        @Test
+        @DisplayName("task :app:detektMain should not report FunctionNaming")
+        fun libDetektMain() {
+            gradleRunner.runTasksAndCheckResult(":app:detektMain") { buildResult ->
+                assertThat(buildResult.output).doesNotContain("FunctionNaming")
+            }
+        }
+    }
+
+    @Nested
+    inner class `configures android tasks with custom config that not uses ignoreAnnotated` {
+        val projectLayout = ProjectLayout(
+            numberOfSourceFilesInRootPerSourceDir = 0,
+        ).apply {
+            addSubmodule(
+                name = "app",
+                numberOfSourceFilesPerSourceDir = 0,
+                numberOfCodeSmells = 0,
+                buildFileContent = """
+                        $APP_PLUGIN_BLOCK
+                        $ANDROID_BLOCK_WITH_VIEW_BINDING
+                        $DETEKT_CUSTOM_CONFIG_BLOCK
+                    """.trimIndent(),
+                srcDirs = listOf("src/main/java"),
+            )
+        }
+        val gradleRunner = createGradleRunnerAndSetupProject(projectLayout, dryRun = false).also {
+            it.projectFile("app/src/main/java").mkdirs()
+            it.projectFile("app/src/main/res/layout").mkdirs()
+            it.writeProjectFile("app/config/detekt.yml", CONFIG_FILE_CONTENT)
+            it.writeProjectFile("app/src/main/AndroidManifest.xml", manifestContent())
+            it.writeProjectFile(
+                "app/src/main/res/layout/activity_sample.xml",
+                SAMPLE_ACTIVITY_LAYOUT
+            )
+            it.writeProjectFile(
+                "app/src/main/java/SampleActivity.kt",
+                SAMPLE_ACTIVITY_USING_VIEW_BINDING + FUNCTION_WITH_NAMING_VIOLATION
+            )
+        }
+
+        @Test
+        @DisplayName("task :app:detektMain should report FunctionNaming")
+        fun libDetektMain() {
+            gradleRunner.runTasksAndCheckResult(":app:detektMain") { buildResult ->
+                assertThat(buildResult.output).contains("FunctionNaming")
+            }
+        }
+    }
 }
 
 /**
@@ -593,6 +675,23 @@ internal fun manifestContent(packageName: String = "io.gitlab.arturbosch.detekt.
     <manifest package="$packageName"
         xmlns:android="http://schemas.android.com/apk/res/android"/>
 """.trimIndent()
+
+private val CONFIG_FILE_WITH_IGNOREANNOTATED_CONTENT = """
+        |build:
+        |  maxIssues: 5
+        |naming:
+        |  FunctionNaming:
+        |    active: true
+        |    ignoreAnnotated: [ 'Deprecated' ]
+    """.trimMargin()
+
+private val CONFIG_FILE_CONTENT = """
+        |build:
+        |  maxIssues: 5
+        |naming:
+        |  FunctionNaming:
+        |    active: true
+    """.trimMargin()
 
 private val APP_PLUGIN_BLOCK = """
     plugins {
@@ -662,6 +761,12 @@ private val DETEKT_REPORTS_BLOCK = """
     }
 """.trimIndent()
 
+private val DETEKT_CUSTOM_CONFIG_BLOCK = """
+    extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+        config = files("config/detekt.yml")
+  }
+""".trimIndent()
+
 private val SAMPLE_ACTIVITY_LAYOUT = """
     <?xml version="1.0" encoding="utf-8"?>
     <View
@@ -687,6 +792,13 @@ private val SAMPLE_ACTIVITY_USING_VIEW_BINDING = """
             binding.sampleView ?: return
             setContentView(binding.root)
         }
+    }
+""".trimIndent() + "\n" // new line at end of file rule
+
+private val FUNCTION_WITH_NAMING_VIOLATION = """    
+    @Deprecated("No reason")
+    fun Composablee() {
+        // nothing in here
     }
 """.trimIndent() + "\n" // new line at end of file rule
 
