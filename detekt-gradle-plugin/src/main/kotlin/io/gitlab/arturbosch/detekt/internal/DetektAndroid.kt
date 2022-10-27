@@ -1,23 +1,18 @@
-@file:Suppress("DEPRECATION")
-
 package io.gitlab.arturbosch.detekt.internal
 
-import com.android.build.gradle.AppExtension
-import com.android.build.gradle.BaseExtension
-import com.android.build.gradle.LibraryExtension
-import com.android.build.gradle.TestExtension
-import com.android.build.gradle.api.BaseVariant
-import com.android.build.gradle.internal.api.TestedVariant
+import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.api.variant.ApplicationVariant
+import com.android.build.api.variant.DynamicFeatureVariant
+import com.android.build.api.variant.LibraryVariant
+import com.android.build.api.variant.TestVariant
+import com.android.build.api.variant.Variant
 import com.android.build.gradle.internal.tasks.factory.dependsOn
 import io.gitlab.arturbosch.detekt.Detekt
 import io.gitlab.arturbosch.detekt.DetektCreateBaselineTask
 import io.gitlab.arturbosch.detekt.DetektPlugin
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
-import org.gradle.api.DomainObjectSet
 import org.gradle.api.Project
 import org.gradle.api.Task
-import org.gradle.api.attributes.Attribute
-import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileCollection
 import org.gradle.api.tasks.TaskProvider
 
@@ -55,82 +50,54 @@ internal class DetektAndroid(private val project: Project) {
         }
     }
 
-    private val BaseExtension.variants: DomainObjectSet<out BaseVariant>?
-        get() = when (this) {
-            is AppExtension -> applicationVariants
-            is LibraryExtension -> libraryVariants
-            is TestExtension -> applicationVariants
-            else -> null
-        }
-
-    private val BaseVariant.testVariants: List<BaseVariant>
-        get() = if (this is TestedVariant) {
-            listOfNotNull(testVariant, unitTestVariant)
-        } else {
-            emptyList()
-        }
-
     fun registerTasks(extension: DetektExtension) {
-        // There is not a single Android plugin, but each registers an extension based on BaseExtension,
+        // There is not a single Android plugin, but each registers an extension based on AndroidComponentsExtension,
         // so we catch them all by looking for this one
-        project.extensions.findByType(BaseExtension::class.java)?.let { baseExtension ->
-            val bootClasspath = project.files(project.provider { baseExtension.bootClasspath })
-            baseExtension.variants
-                ?.matching { !extension.matchesIgnoredConfiguration(it) }
-                ?.all { variant ->
-                    project.registerAndroidDetektTask(bootClasspath, extension, variant)
-                        .also { provider ->
-                            mainTaskProvider.dependsOn(provider)
+        project.extensions.findByType(AndroidComponentsExtension::class.java)?.let { androidComponentsExtension ->
+            androidComponentsExtension.onVariants { variant ->
+                when (variant) {
+                    is ApplicationVariant, is LibraryVariant, is DynamicFeatureVariant -> {
+                        if (!extension.matchesIgnoredConfiguration(variant)) {
+                            project.registerAndroidDetektTask(extension, variant).also { provider ->
+                                mainTaskProvider.dependsOn(provider)
+                            }
+                            project.registerAndroidCreateBaselineTask(extension, variant).also { provider ->
+                                mainBaselineTaskProvider.dependsOn(provider)
+                            }
                         }
-                    project.registerAndroidCreateBaselineTask(bootClasspath, extension, variant)
-                        .also { provider ->
-                            mainBaselineTaskProvider.dependsOn(provider)
+                    }
+                    is TestVariant -> {
+                        if (!extension.matchesIgnoredConfiguration(variant)) {
+                            project.registerAndroidDetektTask(extension, variant).also { provider ->
+                                testTaskProvider.dependsOn(provider)
+                            }
+                            project.registerAndroidCreateBaselineTask(extension, variant).also { provider ->
+                                testBaselineTaskProvider.dependsOn(provider)
+                            }
                         }
-                    variant.testVariants
-                        .filter { !extension.matchesIgnoredConfiguration(it) }
-                        .forEach { testVariant ->
-                            project.registerAndroidDetektTask(bootClasspath, extension, testVariant)
-                                .also { provider ->
-                                    testTaskProvider.dependsOn(provider)
-                                }
-                            project.registerAndroidCreateBaselineTask(
-                                bootClasspath,
-                                extension,
-                                testVariant
-                            )
-                                .also { provider ->
-                                    testBaselineTaskProvider.dependsOn(provider)
-                                }
-                        }
+                    }
                 }
+            }
         }
     }
 
-    private fun DetektExtension.matchesIgnoredConfiguration(variant: BaseVariant): Boolean =
+    private fun DetektExtension.matchesIgnoredConfiguration(variant: Variant): Boolean =
         ignoredVariants.contains(variant.name) ||
-            ignoredBuildTypes.contains(variant.buildType.name) ||
+            ignoredBuildTypes.contains(variant.buildType) ||
             ignoredFlavors.contains(variant.flavorName)
 }
 
 internal fun Project.registerAndroidDetektTask(
-    bootClasspath: FileCollection,
     extension: DetektExtension,
-    variant: BaseVariant,
+    variant: Variant,
     taskName: String = DetektPlugin.DETEKT_TASK_NAME + variant.name.capitalize(),
     extraInputSource: FileCollection? = null
 ): TaskProvider<Detekt> =
     registerDetektTask(taskName, extension) {
-        setSource(variant.sourceSets.map { it.javaDirectories + it.kotlinDirectories })
+        val sourceDirs = variant.sources.java?.all?.get().orEmpty() + variant.sources.kotlin?.all?.get().orEmpty()
+        setSource(sourceDirs.map { it.asFile })
         extraInputSource?.let { source(it) }
-        classpath.setFrom(
-            variant.compileConfiguration.incoming.artifactView { view ->
-                view.attributes {
-                    it.attribute(Attribute.of("artifactType", String::class.java), "jar")
-                }
-            }.files,
-            bootClasspath,
-            javaCompileDestination(variant),
-        )
+        classpath.setFrom(variant.compileClasspath)
         // If a baseline file is configured as input file, it must exist to be configured, otherwise the task fails.
         // We try to find the configured baseline or alternatively a specific variant matching this task.
         extension.baseline?.existingVariantOrBaseFile(variant.name)?.let { baselineFile ->
@@ -141,36 +108,17 @@ internal fun Project.registerAndroidDetektTask(
     }
 
 internal fun Project.registerAndroidCreateBaselineTask(
-    bootClasspath: FileCollection,
     extension: DetektExtension,
-    variant: BaseVariant,
+    variant: Variant,
     taskName: String = DetektPlugin.BASELINE_TASK_NAME + variant.name.capitalize(),
     extraInputSource: FileCollection? = null
 ): TaskProvider<DetektCreateBaselineTask> =
     registerCreateBaselineTask(taskName, extension) {
-        setSource(variant.sourceSets.map { it.javaDirectories + it.kotlinDirectories })
+        val sourceDirs = variant.sources.java?.all?.get().orEmpty() + variant.sources.kotlin?.all?.get().orEmpty()
+        setSource(sourceDirs.map { it.asFile })
         extraInputSource?.let { source(it) }
-        classpath.setFrom(
-            variant.compileConfiguration.incoming.artifactView { view ->
-                view.attributes {
-                    it.attribute(Attribute.of("artifactType", String::class.java), "jar")
-                }
-            }.files,
-            bootClasspath,
-            javaCompileDestination(variant),
-        )
+        classpath.setFrom(variant.compileClasspath)
         val variantBaselineFile = extension.baseline?.addVariantName(variant.name)
         baseline.convention(project.layout.file(project.provider { variantBaselineFile }))
         description = "EXPERIMENTAL: Creates detekt baseline for ${variant.name} classes with type resolution"
     }
-
-private fun Project.javaCompileDestination(variant: BaseVariant): DirectoryProperty? {
-    val javaCompile = variant.javaCompileProvider.orNull
-    if (javaCompile == null) {
-        logger.warn(
-            "Unable to find Java compiler on variant '{}'. Detekt analysis can show false negatives.",
-            variant.name,
-        )
-    }
-    return javaCompile?.destinationDirectory
-}

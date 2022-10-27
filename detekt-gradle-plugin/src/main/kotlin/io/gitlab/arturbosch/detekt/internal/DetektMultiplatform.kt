@@ -1,6 +1,5 @@
 package io.gitlab.arturbosch.detekt.internal
 
-import com.android.build.gradle.BaseExtension
 import io.gitlab.arturbosch.detekt.DetektPlugin
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import io.gitlab.arturbosch.detekt.extensions.DetektReport
@@ -56,28 +55,29 @@ internal class DetektMultiplatform(private val project: Project) {
     ) {
         // For Android targets we delegate to DetektAndroid as we need to access
         // BaseVariant and other AGP apis to properly setup the classpath.
-        extensions.findByType(BaseExtension::class.java)?.let {
-            val bootClasspath = files(provider { it.bootClasspath })
-            val variant = compilation.androidVariant
-            val detektTaskName = DetektPlugin.DETEKT_TASK_NAME +
-                target.name.capitalize() + variant.name.capitalize()
-            val baselineTaskName = DetektPlugin.BASELINE_TASK_NAME +
-                target.name.capitalize() + variant.name.capitalize()
-            registerAndroidDetektTask(
-                bootClasspath,
-                extension,
-                compilation.androidVariant,
-                detektTaskName,
-                inputSource
-            )
-            registerAndroidCreateBaselineTask(
-                bootClasspath,
-                extension,
-                compilation.androidVariant,
-                baselineTaskName,
-                inputSource
-            )
-        }
+// TODO make this wok again
+//        extensions.findByType(BaseExtension::class.java)?.let {
+//            val bootClasspath = files(provider { it.bootClasspath })
+//            val variant = compilation.androidVariant
+//            val detektTaskName = DetektPlugin.DETEKT_TASK_NAME +
+//                target.name.capitalize() + variant.name.capitalize()
+//            val baselineTaskName = DetektPlugin.BASELINE_TASK_NAME +
+//                target.name.capitalize() + variant.name.capitalize()
+//            registerAndroidDetektTask(
+//                bootClasspath,
+//                extension,
+//                compilation.androidVariant,
+//                detektTaskName,
+//                inputSource
+//            )
+//            registerAndroidCreateBaselineTask(
+//                bootClasspath,
+//                extension,
+//                compilation.androidVariant,
+//                baselineTaskName,
+//                inputSource
+//            )
+//        }
     }
 
     @Suppress("LongMethod")
